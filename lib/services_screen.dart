@@ -2,9 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart' as p;
 import 'booking_screen.dart';
-import 'api_data_screen.dart'; // <-- API screen import
+import 'api_data_screen.dart';
 
-// ========== SERVICE MODEL ==========
+// ========== NEW SCREENS (renamed) ==========
+import 'register_client_screen.dart';
+import 'mark_client_attendance_screen.dart';
+import 'client_attendance_report_screen.dart';
+
+// ========== SERVICE MODEL (unchanged) ==========
 class Service {
   int? id;
   String name;
@@ -40,7 +45,87 @@ class Service {
   }
 }
 
-// ========== DATABASE HELPER ==========
+// ========== CLIENT MODEL (renamed from Student) ==========
+class Client {
+  int? id;
+  String name;
+  String phone; // instead of regNo
+  String preferredService; // instead of class
+  String createdAt;
+
+  Client(
+      {this.id,
+      required this.name,
+      required this.phone,
+      required this.preferredService,
+      required this.createdAt});
+
+  Map<String, dynamic> toMap() {
+    return {
+      'id': id,
+      'name': name,
+      'phone': phone,
+      'preferred_service': preferredService,
+      'created_at': createdAt,
+    };
+  }
+
+  factory Client.fromMap(Map<String, dynamic> map) {
+    return Client(
+      id: map['id'],
+      name: map['name'],
+      phone: map['phone'],
+      preferredService: map['preferred_service'],
+      createdAt: map['created_at'],
+    );
+  }
+}
+
+// ========== CLIENT ATTENDANCE MODEL (renamed) ==========
+class ClientAttendance {
+  int? id;
+  int clientId;
+  int? serviceId; // optional – could be the booked service
+  String date;
+  String status; // 'checked-in', 'no-show', 'late'
+  String? timeIn;
+  String? remarks;
+
+  ClientAttendance(
+      {this.id,
+      required this.clientId,
+      this.serviceId,
+      required this.date,
+      required this.status,
+      this.timeIn,
+      this.remarks});
+
+  Map<String, dynamic> toMap() {
+    return {
+      'id': id,
+      'client_id': clientId,
+      'service_id': serviceId,
+      'date': date,
+      'status': status,
+      'time_in': timeIn,
+      'remarks': remarks,
+    };
+  }
+
+  factory ClientAttendance.fromMap(Map<String, dynamic> map) {
+    return ClientAttendance(
+      id: map['id'],
+      clientId: map['client_id'],
+      serviceId: map['service_id'],
+      date: map['date'],
+      status: map['status'],
+      timeIn: map['time_in'],
+      remarks: map['remarks'],
+    );
+  }
+}
+
+// ========== DATABASE HELPER (extended) ==========
 class DatabaseHelper {
   static final DatabaseHelper _instance = DatabaseHelper._internal();
   factory DatabaseHelper() => _instance;
@@ -58,8 +143,9 @@ class DatabaseHelper {
     String path = p.join(await getDatabasesPath(), 'beauty_booking.db');
     return await openDatabase(
       path,
-      version: 1,
+      version: 3, // increment version
       onCreate: (db, version) async {
+        // --- SERVICES TABLE ---
         await db.execute('''
           CREATE TABLE services(
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -102,10 +188,61 @@ class DatabaseHelper {
         });
         await db.insert('services',
             {'name': 'Waxing', 'duration': '30 min', 'price': 30, 'icon': '✨'});
+
+        // --- CLIENTS TABLE (renamed) ---
+        await db.execute('''
+          CREATE TABLE clients(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT,
+            phone TEXT UNIQUE,
+            preferred_service TEXT,
+            created_at TEXT
+          )
+        ''');
+
+        // --- CLIENT ATTENDANCE TABLE (renamed) ---
+        await db.execute('''
+          CREATE TABLE client_attendance(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            client_id INTEGER,
+            service_id INTEGER,
+            date TEXT,
+            status TEXT,
+            time_in TEXT,
+            remarks TEXT,
+            FOREIGN KEY(client_id) REFERENCES clients(id)
+          )
+        ''');
+      },
+      onUpgrade: (db, oldVersion, newVersion) async {
+        if (oldVersion < 3) {
+          await db.execute('''
+            CREATE TABLE clients(
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              name TEXT,
+              phone TEXT UNIQUE,
+              preferred_service TEXT,
+              created_at TEXT
+            )
+          ''');
+          await db.execute('''
+            CREATE TABLE client_attendance(
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              client_id INTEGER,
+              service_id INTEGER,
+              date TEXT,
+              status TEXT,
+              time_in TEXT,
+              remarks TEXT,
+              FOREIGN KEY(client_id) REFERENCES clients(id)
+            )
+          ''');
+        }
       },
     );
   }
 
+  // --- SERVICE CRUD (unchanged) ---
   Future<int> insertService(Service service) async {
     Database db = await database;
     return await db.insert('services', service.toMap());
@@ -136,9 +273,83 @@ class DatabaseHelper {
       return maps.map((map) => Service.fromMap(map)).toList();
     }
   }
+
+  // --- CLIENT CRUD (renamed) ---
+  Future<int> insertClient(Client client) async {
+    Database db = await database;
+    return await db.insert('clients', client.toMap());
+  }
+
+  Future<List<Client>> getClients({String? searchQuery}) async {
+    Database db = await database;
+    if (searchQuery != null && searchQuery.isNotEmpty) {
+      final List<Map<String, dynamic>> maps = await db.query(
+        'clients',
+        where: 'name LIKE ? OR phone LIKE ?',
+        whereArgs: ['%$searchQuery%', '%$searchQuery%'],
+      );
+      return maps.map((m) => Client.fromMap(m)).toList();
+    } else {
+      final List<Map<String, dynamic>> maps = await db.query('clients');
+      return maps.map((m) => Client.fromMap(m)).toList();
+    }
+  }
+
+  Future<int> updateClient(Client client) async {
+    Database db = await database;
+    return await db.update('clients', client.toMap(),
+        where: 'id = ?', whereArgs: [client.id]);
+  }
+
+  Future<int> deleteClient(int id) async {
+    Database db = await database;
+    return await db.delete('clients', where: 'id = ?', whereArgs: [id]);
+  }
+
+  // --- CLIENT ATTENDANCE CRUD (renamed) ---
+  Future<int> insertClientAttendance(ClientAttendance attendance) async {
+    Database db = await database;
+    return await db.insert('client_attendance', attendance.toMap());
+  }
+
+  Future<List<ClientAttendance>> getAttendanceByDate(String date) async {
+    Database db = await database;
+    final List<Map<String, dynamic>> maps = await db.query(
+      'client_attendance',
+      where: 'date = ?',
+      whereArgs: [date],
+    );
+    return maps.map((m) => ClientAttendance.fromMap(m)).toList();
+  }
+
+  Future<List<ClientAttendance>> getAttendanceByClient(int clientId) async {
+    Database db = await database;
+    final List<Map<String, dynamic>> maps = await db.query(
+      'client_attendance',
+      where: 'client_id = ?',
+      whereArgs: [clientId],
+    );
+    return maps.map((m) => ClientAttendance.fromMap(m)).toList();
+  }
+
+  // --- REPORT QUERY (renamed) ---
+  Future<Map<String, int>> getAttendanceSummaryByClient(int clientId) async {
+    Database db = await database;
+    final List<Map<String, dynamic>> maps = await db.rawQuery('''
+      SELECT status, COUNT(*) as count
+      FROM client_attendance
+      WHERE client_id = ?
+      GROUP BY status
+    ''', [clientId]);
+    Map<String, int> summary = {'checked-in': 0, 'no-show': 0, 'late': 0};
+    for (var row in maps) {
+      summary[row['status']] = row['count'];
+    }
+    return summary;
+  }
 }
 
-// ========== SERVICES SCREEN ==========
+// ========== SERVICES SCREEN (with new menu items) ==========
 class ServicesScreen extends StatefulWidget {
   const ServicesScreen({super.key});
 
@@ -165,6 +376,7 @@ class _ServicesScreenState extends State<ServicesScreen> {
   }
 
   void _addOrEditService({Service? existing}) {
+    // ... (same as before, keep as is)
     final isEditing = existing != null;
     final nameController = TextEditingController(text: existing?.name ?? '');
     final durationController =
@@ -264,8 +476,8 @@ class _ServicesScreenState extends State<ServicesScreen> {
         title: const Text('Our Services'),
         backgroundColor: Colors.pink,
         foregroundColor: Colors.white,
-        // ========== API BUTTON ADDED HERE ==========
         actions: [
+          // API Icon (unchanged)
           IconButton(
             icon: Icon(Icons.api),
             onPressed: () {
@@ -275,6 +487,35 @@ class _ServicesScreenState extends State<ServicesScreen> {
               );
             },
             tooltip: 'View API Data',
+          ),
+          // NEW: 3-dot menu for Client Attendance
+          PopupMenuButton(
+            icon: Icon(Icons.more_vert),
+            onSelected: (value) {
+              if (value == 'register_client') {
+                Navigator.push(context,
+                    MaterialPageRoute(builder: (_) => RegisterClientScreen()));
+              } else if (value == 'mark_attendance') {
+                Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => MarkClientAttendanceScreen()));
+              } else if (value == 'report') {
+                Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                        builder: (_) => ClientAttendanceReportScreen()));
+              }
+            },
+            itemBuilder: (context) => [
+              PopupMenuItem(
+                  value: 'register_client', child: Text('Register Client')),
+              PopupMenuItem(
+                  value: 'mark_attendance',
+                  child: Text('Mark Client Check‑in')),
+              PopupMenuItem(
+                  value: 'report', child: Text('Client Attendance Report')),
+            ],
           ),
         ],
         bottom: PreferredSize(
